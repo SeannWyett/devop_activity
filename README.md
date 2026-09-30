@@ -39,3 +39,44 @@ Commands neededd to run the project
 
 Github repo link:
 https://github.com/SeannWyett/devop_activity.git
+
+## Request Data Model
+
+The project contains a `requests` table for storing request information.
+
+### Request Fields
+
+- id - Unique request number
+- requester_name - Name of the requester
+- requester_email - Requester's email address
+- item_name - Requested item or service
+- quantity - Number of items requested
+- purpose - Reason for the request
+- status - Current request status; defaults to pending
+- created_at - Request creation timestamp
+- updated_at - Request update timestamp
+
+### Migration
+
+Run the following command to create the requests table:
+
+php artisan migrate
+
+### Verify Migration
+
+Check the migration status using:
+
+php artisan migrate:status
+
+The requests table can also be inspected using phpMyAdmin.
+
+## User Stories
+
+### Requester
+As a requester, I want to submit a request with my name, email, requested item, quantity, and purpose so that my request can be properly recorded.
+
+### Staff Reviewer
+As a staff reviewer, I want to see the request details and status so that I can identify requests that are still pending.
+
+### Record Keeper
+As a record keeper, I want requests to have creation and update timestamps so that I can track when request records were created or modified.
