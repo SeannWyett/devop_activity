@@ -80,3 +80,36 @@ As a staff reviewer, I want to see the request details and status so that I can 
 
 ### Record Keeper
 As a record keeper, I want requests to have creation and update timestamps so that I can track when request records were created or modified.
+
+### Testing
+
+Run the Laravel tests using:
+
+```bash
+php artisan test
+```
+
+Security tests include:
+
+- Students can only access their own requests.
+- Students cannot access another student's request.
+- Admins can access all requests.
+- Students cannot update request status.
+- Invalid input is rejected.
+- CSRF-protected requests reject invalid or missing CSRF tokens.
+- User-submitted protected fields cannot change ownership or privileges.
+
+### Dependency Audit
+
+Run:
+
+```bash
+composer audit
+```
+
+The result should be recorded here:
+
+```text
+No security vulnerability advisories found.
+```
+
