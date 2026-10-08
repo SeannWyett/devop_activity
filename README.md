@@ -116,6 +116,7 @@ The result should be recorded here:
 ```text
 No security vulnerability advisories found.
 ```
+
 ## Laboratory 3 Verification
 
-Verification instruction: Follow the required access checks.
+Verification instruction: Test administrator access and administrator-only status updates.
