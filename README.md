@@ -7,6 +7,7 @@ BSIT 4-3
 
 Software requirement: Laravel Installed, VS code installed(IDE)
 Laravel installation instructions
+
 1. Clone the Repository and Navigate to It
    git clone <repository-url>
    cd <project-folder-name>
@@ -21,21 +22,21 @@ Laravel installation instructions
 Database name: laravel_request_system
 Database import instructions
 Step 1: Configure Environment Variables
-  DB_CONNECTION=mysql
-  DB_HOST=127.0.0.1
-  DB_PORT=3306
-  DB_DATABASE=your_database_name
-  DB_USERNAME=root
-  DB_PASSWORD=your_password
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=your_database_name
+DB_USERNAME=root
+DB_PASSWORD=your_password
 Step 2: Create the Database
-  CREATE DATABASE your_database_name;
+CREATE DATABASE your_database_name;
 Step 3: Import the .sql File
-  mysql -u root -p your_database_name < /path/to/your-file.sql
+mysql -u root -p your_database_name < /path/to/your-file.sql
 Step 4: Verify the Connection
-  php artisan db:show
+php artisan db:show
 
 Commands neededd to run the project
-  composer install
+composer install
 
 Github repo link:
 https://github.com/SeannWyett/devop_activity.git
@@ -73,12 +74,15 @@ The requests table can also be inspected using phpMyAdmin.
 ## User Stories
 
 ### Requester
+
 As a requester, I want to submit a request with my name, email, requested item, quantity, and purpose so that my request can be properly recorded.
 
 ### Staff Reviewer
+
 As a staff reviewer, I want to see the request details and status so that I can identify requests that are still pending.
 
 ### Record Keeper
+
 As a record keeper, I want requests to have creation and update timestamps so that I can track when request records were created or modified.
 
 ### Testing
@@ -113,3 +117,4 @@ The result should be recorded here:
 No security vulnerability advisories found.
 ```
 
+Verification instruction: Test student ownership and deny access to another student's request.
