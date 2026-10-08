@@ -119,4 +119,5 @@ No security vulnerability advisories found.
 
 ## Laboratory 3 Verification
 
+Verification instruction: Test student ownership and deny access to another student's request.
 Verification instruction: Test administrator access and administrator-only status updates.
