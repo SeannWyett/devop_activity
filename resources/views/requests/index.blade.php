@@ -90,7 +90,7 @@
                 </div>
 
                 <form method="POST" action="{{ route('requests.store') }}" class="space-y-4">
-                    <input type="hidden" name="_token" value="THIS_IS_NOT_A_REAL_TOKEN">
+                    @csrf
                     <div>
                         <label for="item_name" class="mb-1.5 block text-sm font-medium">Item or service</label>
                         <input id="item_name" name="item_name" type="text" value="{{ old('item_name') }}" required maxlength="150" placeholder="e.g. Lab equipment"
