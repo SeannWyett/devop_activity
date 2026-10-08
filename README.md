@@ -112,4 +112,6 @@ The result should be recorded here:
 ```text
 No security vulnerability advisories found.
 ```
+## Laboratory 3 Verification
 
+Verification instruction: Test student ownership and deny access to another student's request.
