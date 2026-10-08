@@ -165,34 +165,4 @@ User-submitted values are displayed using Laravel's escaped Blade syntax:
 
 This prevents user input from being interpreted as HTML or JavaScript.
 
-### Testing
 
-Run the Laravel tests using:
-
-```bash
-php artisan test
-```
-
-Security tests include:
-
-- Students can only access their own requests.
-- Students cannot access another student's request.
-- Admins can access all requests.
-- Students cannot update request status.
-- Invalid input is rejected.
-- CSRF-protected requests reject invalid or missing CSRF tokens.
-- User-submitted protected fields cannot change ownership or privileges.
-
-### Dependency Audit
-
-Run:
-
-```bash
-composer audit
-```
-
-The result should be recorded here:
-
-```text
-No security vulnerability advisories found.
-```
