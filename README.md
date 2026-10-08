@@ -80,3 +80,119 @@ As a staff reviewer, I want to see the request details and status so that I can 
 
 ### Record Keeper
 As a record keeper, I want requests to have creation and update timestamps so that I can track when request records were created or modified.
+
+## Lab 3 — Security and Authorization
+
+### Authentication
+
+Users must be authenticated before accessing protected request functions.
+
+The system has two roles:
+
+- **Student** — can create and view their own requests.
+- **Admin** — can view all requests and update request status.
+
+### Request Ownership
+
+Students can only view requests that belong to them.
+
+The system checks the authenticated user's ID against the request's `user_id`.
+
+```php
+if ($user->role !== 'admin') {
+    $query->where('user_id', $user->id);
+}
+```
+
+Administrators are not restricted by request ownership and can view all requests.
+
+Ownership filtering is applied before searching, filtering, and pagination.
+
+### Unauthorized Access
+
+A student who tries to access another student's request is denied.
+
+The application uses:
+
+**HTTP 403 Forbidden**
+
+for authenticated users who are not authorized to perform an action.
+
+### Policy Responsibilities
+
+The `ServiceRequestPolicy` controls access to requests.
+
+- `viewAny` — authenticated users
+- `view` — request owner or admin
+- `create` — students
+- `updateStatus` — admin only
+
+### Trusted Field Assignment
+
+The application does not trust user-submitted ownership or privilege fields.
+
+The `user_id` is assigned using the authenticated user:
+
+```php
+$request->user()->id
+```
+
+Students cannot use their submitted data to change the request owner or request status.
+
+### CSRF Protection
+
+CSRF protection remains enabled for Laravel web routes.
+
+State-changing forms use:
+
+```blade
+@csrf
+```
+
+PATCH forms also use:
+
+```blade
+@method('PATCH')
+```
+
+### Escaped Output
+
+User-submitted values are displayed using Laravel's escaped Blade syntax:
+
+```blade
+{{ $serviceRequest->item_name }}
+```
+
+This prevents user input from being interpreted as HTML or JavaScript.
+
+### Testing
+
+Run the Laravel tests using:
+
+```bash
+php artisan test
+```
+
+Security tests include:
+
+- Students can only access their own requests.
+- Students cannot access another student's request.
+- Admins can access all requests.
+- Students cannot update request status.
+- Invalid input is rejected.
+- CSRF-protected requests reject invalid or missing CSRF tokens.
+- User-submitted protected fields cannot change ownership or privileges.
+
+### Dependency Audit
+
+Run:
+
+```bash
+composer audit
+```
+
+The result should be recorded here:
+
+```text
+No security vulnerability advisories found.
+```
