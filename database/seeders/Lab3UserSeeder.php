@@ -14,15 +14,15 @@ class Lab3UserSeeder extends Seeder
     public function run(): void
     {
         User::create([
-            'name' => 'Student A',
-            'email' => 'student.a@example.com',
+            'name' => 'Juan Dela Cruz',
+            'email' => 'juan@example.com',
             'password' => 'StudentA123!',
             'role' => 'student',
         ]);
 
         User::create([
-            'name' => 'Student B',
-            'email' => 'student.b@example.com',
+            'name' => 'Maria Santos',
+            'email' => 'maria@example.com',
             'password' => 'StudentB123!',
             'role' => 'student',
         ]);
