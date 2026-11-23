@@ -10,6 +10,6 @@
 # Never use this file against the project named devops-staging.
 
 services:
-  app:
-    environment:
-      APP_DEBUG: "true"
+    app:
+        environment:
+            APP_DEBUG: 'true'
