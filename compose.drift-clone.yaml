@@ -1,0 +1,15 @@
+# Laboratory 9, step 7 - controlled drift on a DISPOSABLE CLONE only.
+#
+# Layer this over compose.staging.yaml and run it under a different project name
+# and port so it never touches the real staging stack or its database:
+#
+#   docker compose -p devops-clone -f compose.staging.yaml -f compose.drift-clone.yaml `
+#     --env-file .env.staging --env-file .env.staging.db up -d
+#
+# (See LAB8-9-GUIDE.md, Lab 9 step 7 for the full sequence.)
+# Never use this file against the project named devops-staging.
+
+services:
+  app:
+    environment:
+      APP_DEBUG: "true"
