@@ -100,4 +100,4 @@ CMD ["php-fpm"]
 FROM nginx:1.28-alpine AS web
 
 COPY --from=app /var/www/html/public /var/www/html/public
-COPY docker/nginx/default.conf /etc/nginx/conf.d/default.conf
+COPY docker/nginx/default.conf.template /etc/nginx/templates/default.conf.template
