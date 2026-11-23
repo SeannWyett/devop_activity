@@ -1,0 +1,268 @@
+name: Release to staging
+
+# Laboratory 8 release workflow.
+#   mode = build    -> test, build both images from the selected branch, push to GHCR,
+#                      then WAIT at the "staging" environment for approval.
+#   mode = redeploy -> look up the images already pushed for that version (rollback),
+#                      then WAIT at the "staging" environment for approval.
+# After approval the workflow records the decision and prints the exact deploy command
+# for deploy-staging.ps1. Staging runs on the team's own machine, which GitHub-hosted
+# runners cannot reach, so the deploy step itself is run locally with that command.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag, e.g. v1.4.0 or v1.4.1-lab-fault"
+        required: true
+        type: string
+      mode:
+        description: "build = test, build and push from the selected branch. redeploy = reuse images already pushed for this version (rollback)."
+        required: true
+        type: choice
+        default: build
+        options:
+          - build
+          - redeploy
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-release
+  cancel-in-progress: false
+
+env:
+  VERSION: ${{ inputs.version }}
+
+jobs:
+  prepare:
+    name: Validate version and name images
+    runs-on: ubuntu-latest
+    outputs:
+      app_image: ${{ steps.names.outputs.app_image }}
+      web_image: ${{ steps.names.outputs.web_image }}
+    steps:
+      - id: names
+        run: |
+          set -euo pipefail
+          re='^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$'
+          if ! [[ "$VERSION" =~ $re ]]; then
+            echo "::error::Version must look like v1.4.0 or v1.4.1-lab-fault (got: $VERSION)"
+            exit 1
+          fi
+          repo="${GITHUB_REPOSITORY,,}"
+          echo "app_image=ghcr.io/${repo}/app" >> "$GITHUB_OUTPUT"
+          echo "web_image=ghcr.io/${repo}/web" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Test (CI gate)
+    needs: prepare
+    if: ${{ inputs.mode == 'build' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: mbstring, intl, zip, pdo_sqlite, pdo_mysql
+          coverage: none
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Dependency audit
+        run: composer audit
+
+      - name: Prepare test environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: Build frontend (also generates Wayfinder routes)
+        run: |
+          npm ci
+          npm run build
+
+      - name: Run tests
+        run: php artisan test
+
+  build:
+    name: Build and push images
+    needs: [prepare, test]
+    if: ${{ inputs.mode == 'build' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      app_digest: ${{ steps.app.outputs.digest }}
+      web_digest: ${{ steps.web.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to overwrite an existing version
+        env:
+          APP_IMAGE: ${{ needs.prepare.outputs.app_image }}
+        run: |
+          if docker buildx imagetools inspect "${APP_IMAGE}:${VERSION}" > /dev/null 2>&1; then
+            echo "::error::${APP_IMAGE}:${VERSION} already exists. Versions are immutable; pick a new version."
+            exit 1
+          fi
+
+      - name: Build and push app image (PHP-FPM)
+        id: app
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: app
+          push: true
+          provenance: false
+          tags: ${{ needs.prepare.outputs.app_image }}:${{ inputs.version }}
+          build-args: |
+            APP_VERSION=${{ inputs.version }}
+            GIT_SHA=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,mode=max,scope=app
+
+      - name: Build and push web image (nginx)
+        id: web
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: web
+          push: true
+          provenance: false
+          tags: ${{ needs.prepare.outputs.web_image }}:${{ inputs.version }}
+          build-args: |
+            APP_VERSION=${{ inputs.version }}
+            GIT_SHA=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+  resolve:
+    name: Look up existing images (rollback)
+    needs: prepare
+    if: ${{ inputs.mode == 'redeploy' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      app_digest: ${{ steps.digests.outputs.app_digest }}
+      web_digest: ${{ steps.digests.outputs.web_digest }}
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: digests
+        env:
+          APP_IMAGE: ${{ needs.prepare.outputs.app_image }}
+          WEB_IMAGE: ${{ needs.prepare.outputs.web_image }}
+        run: |
+          set -euo pipefail
+          app=$(docker buildx imagetools inspect "${APP_IMAGE}:${VERSION}" --format '{{.Manifest.Digest}}')
+          web=$(docker buildx imagetools inspect "${WEB_IMAGE}:${VERSION}" --format '{{.Manifest.Digest}}')
+          echo "app_digest=${app}" >> "$GITHUB_OUTPUT"
+          echo "web_digest=${web}" >> "$GITHUB_OUTPUT"
+
+  promote:
+    name: Approval gate - promote to staging
+    needs: [prepare, build, resolve]
+    if: ${{ !cancelled() && (needs.build.result == 'success' || needs.resolve.result == 'success') }}
+    runs-on: ubuntu-latest
+    # The "staging" environment has required reviewers. This job stays in the
+    # "waiting" state until one of them approves or rejects the deployment.
+    environment: staging
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Record approval and print the deploy command
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode }}
+          APP_IMAGE: ${{ needs.prepare.outputs.app_image }}
+          WEB_IMAGE: ${{ needs.prepare.outputs.web_image }}
+          APP_DIGEST: ${{ needs.build.outputs.app_digest || needs.resolve.outputs.app_digest }}
+          WEB_DIGEST: ${{ needs.build.outputs.web_digest || needs.resolve.outputs.web_digest }}
+          BUILD_SHA: ${{ needs.build.result == 'success' && github.sha || 'n/a (redeploy of an existing artifact)' }}
+        run: |
+          set -euo pipefail
+          approved_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          app_ref="${APP_IMAGE}@${APP_DIGEST}"
+          web_ref="${WEB_IMAGE}@${WEB_DIGEST}"
+
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals" > approvals.json 2> /dev/null || echo '[]' > approvals.json
+          approvers=$(jq -r 'if type == "array" then map("\(.user.login) (\(.state))") | join(", ") else "" end' approvals.json)
+          if [ -z "$approvers" ]; then approvers="not returned by the API - copy it from the run page"; fi
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg mode "$MODE" \
+            --arg commit "$BUILD_SHA" \
+            --arg app "$app_ref" \
+            --arg web "$web_ref" \
+            --arg triggered_by "$GITHUB_ACTOR" \
+            --arg approvers "$approvers" \
+            --arg approved_at "$approved_at" \
+            --arg run_url "$run_url" \
+            '{version:$version, mode:$mode, commit:$commit, app_image:$app, web_image:$web,
+              triggered_by:$triggered_by, approvers:$approvers, approved_job_started_utc:$approved_at,
+              workflow_run:$run_url}' > release-record.json
+
+          {
+            echo "## Staging promotion approved"
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Version | \`${VERSION}\` (${MODE}) |"
+            echo "| Commit | \`${BUILD_SHA}\` |"
+            echo "| App image | \`${app_ref}\` |"
+            echo "| Web image | \`${web_ref}\` |"
+            echo "| Triggered by | ${GITHUB_ACTOR} |"
+            echo "| Approver(s) | ${approvers} |"
+            echo "| Gate released (UTC) | ${approved_at} |"
+            echo "| Workflow run | ${run_url} |"
+            echo
+            echo "Run this on the staging machine, from the repository root:"
+            echo
+            echo '```powershell'
+            echo ".\\deploy-staging.ps1 -AppImage ${app_ref} -WebImage ${web_ref} -ExpectedVersion ${VERSION}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          cat release-record.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-record-${{ inputs.version }}-${{ inputs.mode }}
+          path: release-record.json

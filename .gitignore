@@ -43,3 +43,6 @@ yarn-error.log
 /boost.json
 /opencode.json
 /opencode.jsonc
+.env.staging
+.env.staging.db
+config-audit/results/

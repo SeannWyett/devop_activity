@@ -122,7 +122,6 @@ No security vulnerability advisories found.
 Verification instruction: Test student ownership and deny access to another student's request.
 Verification instruction: Test administrator access and administrator-only status updates.
 
-
 # Lab 4 — Docker Containerization
 
 ## 1. Project Overview
@@ -135,11 +134,11 @@ The purpose is to provide a consistent environment, simplify application startup
 
 The project contains three main services:
 
-| Service | Image / Configuration | Responsibility |
-|---|---|---|
-| `web` | Nginx | Receives browser requests and forwards PHP requests to the Laravel application. |
-| `app` | Custom PHP/Laravel image | Runs the Laravel application and Artisan commands. |
-| `db` | MySQL 8.4 | Stores application records in a persistent database volume. |
+| Service | Image / Configuration    | Responsibility                                                                  |
+| ------- | ------------------------ | ------------------------------------------------------------------------------- |
+| `web`   | Nginx                    | Receives browser requests and forwards PHP requests to the Laravel application. |
+| `app`   | Custom PHP/Laravel image | Runs the Laravel application and Artisan commands.                              |
+| `db`    | MySQL 8.4                | Stores application records in a persistent database volume.                     |
 
 ### Architecture Diagram
 
@@ -384,7 +383,7 @@ docker inspect devops-activity-db-1 --format '{{json .NetworkSettings.Ports}}'
 The tested result was:
 
 ```json
-{"3306/tcp":null,"33060/tcp":null}
+{ "3306/tcp": null, "33060/tcp": null }
 ```
 
 This indicates that neither database port was published to the host in the inspected container.

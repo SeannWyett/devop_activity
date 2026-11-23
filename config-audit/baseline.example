@@ -1,0 +1,32 @@
+# Declarative baseline for the staging app container (NONSECRET values only).
+# Format: KEY=value, one per line. Lines starting with # are ignored.
+# Read by config-audit/audit.sh (in the container) and config-audit/run-audit.ps1 (host).
+# Never put passwords, keys or tokens in this file.
+
+# Approved environment label and debug setting (compared with the EFFECTIVE Laravel config)
+APP_ENV=staging
+APP_DEBUG=false
+
+# Web server document root: must be Laravel's public/ directory
+DOCUMENT_ROOT=/var/www/html/public
+
+# Paths the service account must be able to write, relative to the app root.
+# They must NOT be world-writable.
+WRITABLE_PATHS=storage bootstrap/cache
+
+# Identity the PHP-FPM process runs as (never root)
+SERVICE_USER=www-data
+
+# Runtime database account (restricted, not root) and where the DB is reachable from
+DB_USERNAME=laravel_app
+DB_HOST=db
+
+# The MySQL container must publish no ports to the host
+DB_PUBLISHED_PORTS=none
+
+# Only the web service is exposed, and only on the loopback interface
+EXPOSED_PORTS=127.0.0.1:8081
+EXPECTED_SERVICES=web app db
+
+# TLS is terminated nowhere in this lab setup (local HTTP only)
+TLS=none

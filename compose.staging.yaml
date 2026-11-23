@@ -1,0 +1,92 @@
+# Staging stack for Laboratory 8 and 9.
+#
+# Standalone file (not an override of compose.yaml) so that it can never publish
+# the dev port or reuse the dev volume by accident. It runs the SAME three services as
+# Laboratory 4 (web = nginx, app = PHP-FPM, db = MySQL 8.4) but:
+#   - uses released, digest-pinned images from GHCR instead of building locally
+#   - has its own network, its own named volume and its own database
+#   - listens on 127.0.0.1:8081 (dev stays on 8080)
+#   - gives the app container ONLY the app secrets (the MySQL root password is
+#     supplied to the db service through a separate env file)
+#
+# Do not call this file directly with `docker compose up`; use deploy-staging.ps1,
+# which sets APP_IMAGE / WEB_IMAGE from the approved release.
+
+name: devops-staging
+
+services:
+    web:
+        image: ${WEB_IMAGE:?Set WEB_IMAGE - use deploy-staging.ps1}
+        ports:
+            - '127.0.0.1:${STAGING_PORT:-8081}:80'
+        depends_on:
+            app:
+                condition: service_started
+        networks:
+            - staging_network
+        restart: unless-stopped
+        healthcheck:
+            test:
+                [
+                    'CMD-SHELL',
+                    'wget -qO- http://127.0.0.1/health > /dev/null || exit 1',
+                ]
+            interval: 15s
+            timeout: 5s
+            retries: 5
+            start_period: 20s
+
+    app:
+        image: ${APP_IMAGE:?Set APP_IMAGE - use deploy-staging.ps1}
+        env_file:
+            - .env.staging
+        environment:
+            # Approved runtime procedure for debug mode: pinned here, in version control.
+            # It overrides anything in .env.staging.
+            APP_ENV: staging
+            APP_DEBUG: 'false'
+            DB_CONNECTION: mysql
+            DB_HOST: db
+            DB_PORT: '3306'
+        depends_on:
+            db:
+                condition: service_healthy
+        networks:
+            - staging_network
+        restart: unless-stopped
+        healthcheck:
+            test: ['CMD', 'php', 'artisan', 'about', '--only=environment']
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 30s
+
+    db:
+        image: mysql:8.4
+        environment:
+            MYSQL_DATABASE: ${DB_DATABASE:?Set DB_DATABASE in .env.staging}
+            MYSQL_USER: ${DB_USERNAME:?Set DB_USERNAME in .env.staging}
+            MYSQL_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env.staging}
+            MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD in .env.staging.db}
+        volumes:
+            - staging_db_data:/var/lib/mysql
+        networks:
+            - staging_network
+        restart: unless-stopped
+        healthcheck:
+            test:
+                [
+                    'CMD-SHELL',
+                    'mysqladmin ping -h 127.0.0.1 -u root -p"$$MYSQL_ROOT_PASSWORD" --silent',
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 10
+            start_period: 30s
+
+networks:
+    staging_network:
+        driver: bridge
+
+volumes:
+    staging_db_data:
