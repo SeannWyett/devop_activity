@@ -25,9 +25,14 @@ FROM php:8.4-cli-bookworm AS frontend
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libicu-dev \
     libzip-dev \
+    libpq-dev \
     unzip \
     libstdc++6 \
-    && docker-php-ext-install pdo_mysql intl zip \
+    && docker-php-ext-install \
+        pdo_mysql \
+        pdo_pgsql \
+        intl \
+        zip \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -75,6 +80,14 @@ RUN mkdir -p \
     && php artisan package:discover --ansi \
     && chown -R www-data:www-data storage bootstrap/cache \
     && chmod -R ug+rwX storage bootstrap/cache
+
+
+ARG APP_VERSION=dev
+ARG GIT_SHA=unknown
+ENV APP_VERSION=$APP_VERSION \
+    GIT_SHA=$GIT_SHA
+
+
 
 USER www-data
 
