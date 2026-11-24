@@ -100,4 +100,25 @@ CMD ["php-fpm"]
 FROM nginx:1.28-alpine AS web
 
 COPY --from=app /var/www/html/public /var/www/html/public
-COPY docker/nginx/default.conf /etc/nginx/conf.d/default.conf
+COPY docker/nginx/default.conf.template /etc/nginx/templates/default.conf.template
+
+# Stage 6: Single container for Render (nginx + PHP-FPM under supervisord)
+       FROM app AS render
+
+       USER root
+       RUN apt-get update && apt-get install -y --no-install-recommends \
+               nginx supervisor gettext-base \
+           && apt-get clean \
+           && rm -rf /var/lib/apt/lists/*
+
+       COPY docker/render/nginx.conf.template /etc/nginx/nginx.conf.template
+       COPY docker/render/php-fpm.conf /usr/local/etc/php-fpm.d/zz-render.conf
+       COPY docker/render/supervisord.conf /etc/supervisor/render.conf
+       COPY docker/render/entrypoint.sh /usr/local/bin/render-entrypoint
+       RUN chmod 755 /usr/local/bin/render-entrypoint
+
+       ENV PORT=10000
+       EXPOSE 10000
+       USER www-data
+       ENTRYPOINT ["/usr/local/bin/render-entrypoint"]
+       CMD []

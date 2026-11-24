@@ -1,11 +1,15 @@
-# Declarative baseline for the staging app container (NONSECRET values only).
+# Declarative baseline for the STAGING release (nonsecret values only).
 # Format: KEY=value, one per line. Lines starting with # are ignored.
-# Read by config-audit/audit.sh (in the container) and config-audit/run-audit.ps1 (host).
+# Read by config-audit/audit.sh (inside the container) and config-audit/run-audit.ps1 (host).
 # Never put passwords, keys or tokens in this file.
+# The production baseline is baseline.production.example (only APP_ENV and the URL rules differ).
 
 # Approved environment label and debug setting (compared with the EFFECTIVE Laravel config)
 APP_ENV=staging
 APP_DEBUG=false
+
+# Public URL must be https (Render terminates TLS; http would break cookies and generated links)
+APP_URL_SCHEME=https
 
 # Web server document root: must be Laravel's public/ directory
 DOCUMENT_ROOT=/var/www/html/public
@@ -14,19 +18,15 @@ DOCUMENT_ROOT=/var/www/html/public
 # They must NOT be world-writable.
 WRITABLE_PATHS=storage bootstrap/cache
 
-# Identity the PHP-FPM process runs as (never root)
+# Identity the container runs as (never root)
 SERVICE_USER=www-data
 
-# Runtime database account (restricted, not root) and where the DB is reachable from
-DB_USERNAME=laravel_app
-DB_HOST=db
+# Database: Supabase (Postgres) over TLS, and never a superuser/owner account.
+DB_CONNECTION=pgsql
+DB_SSLMODE=require
+# Regex of runtime usernames that are NOT allowed. Supabase pooler names look like
+# "<role>.<project-ref>", so "postgres.abcd1234" is the superuser through the pooler.
+DB_FORBIDDEN_USER_REGEX=^(root|postgres|supabase_admin)(\.|$)
 
-# The MySQL container must publish no ports to the host
-DB_PUBLISHED_PORTS=none
-
-# Only the web service is exposed, and only on the loopback interface
-EXPOSED_PORTS=127.0.0.1:8081
-EXPECTED_SERVICES=web app db
-
-# TLS is terminated nowhere in this lab setup (local HTTP only)
-TLS=none
+# Live URL controls checked by run-audit.ps1 -Url
+MIN_CERT_DAYS=7

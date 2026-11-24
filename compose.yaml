@@ -1,5 +1,7 @@
 services:
     web:
+        environment:
+            APP_SERVICE_HOST: 'app'
         build:
             context: .
             dockerfile: Dockerfile
@@ -26,6 +28,7 @@ services:
             DB_CONNECTION: mysql
             DB_HOST: db
             DB_PORT: '3306'
+            APP_SERVICE_HOST: 'app'
         depends_on:
             db:
                 condition: service_healthy
