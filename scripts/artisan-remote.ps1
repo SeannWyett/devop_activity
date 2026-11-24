@@ -40,6 +40,6 @@ Write-Host ''
 & docker pull $Image
 if ($LASTEXITCODE -ne 0) { throw 'Pull failed. For a private GHCR package run: docker login ghcr.io' }
 
-$artisanArgs = $Command -split '\s+' | Where-Object { $_ }
+$artisanArgs = @($Command -split '\s+' | Where-Object { $_ })
 & docker run --rm --env-file $EnvFile -e APP_DEBUG=false --entrypoint php $Image artisan @artisanArgs
 exit $LASTEXITCODE

@@ -60,8 +60,9 @@ FROM php:8.4-fpm-bookworm AS app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libicu-dev \
     libzip-dev \
+    libpq-dev \
     unzip \
-    && docker-php-ext-install pdo_mysql intl zip opcache \
+    && docker-php-ext-install pdo_mysql pdo_pgsql intl zip opcache \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
