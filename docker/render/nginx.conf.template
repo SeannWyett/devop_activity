@@ -1,0 +1,53 @@
+# Rendered at container start by render-entrypoint: ONLY ${PORT} is substituted.
+# Runs as the unprivileged www-data user, so every writable path lives in /tmp.
+# Same routing rules as docker/nginx/default.conf from Laboratory 4, except PHP-FPM is
+# reached through a unix socket in the SAME container instead of app:9000.
+
+worker_processes auto;
+pid /tmp/nginx.pid;
+error_log /dev/stderr warn;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    server_tokens off;
+
+    access_log /dev/stdout;
+
+    client_body_temp_path /tmp/nginx-client-body;
+    proxy_temp_path /tmp/nginx-proxy;
+    fastcgi_temp_path /tmp/nginx-fastcgi;
+    uwsgi_temp_path /tmp/nginx-uwsgi;
+    scgi_temp_path /tmp/nginx-scgi;
+
+    server {
+        listen ${PORT};
+        server_name _;
+
+        root /var/www/html/public;
+        index index.php;
+
+        location / {
+            try_files $uri $uri/ /index.php?$query_string;
+        }
+
+        location ~ \.php$ {
+            try_files $uri =404;
+
+            fastcgi_pass unix:/tmp/php-fpm.sock;
+            fastcgi_index index.php;
+            # Absolute path: the rendered config lives in /tmp, so a relative include would look there.
+            include /etc/nginx/fastcgi_params;
+            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+            fastcgi_param DOCUMENT_ROOT $document_root;
+        }
+
+        location ~ /\.(?!well-known).* {
+            deny all;
+        }
+    }
+}

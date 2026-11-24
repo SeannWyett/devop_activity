@@ -1,6 +1,7 @@
 #!/bin/sh
-# Laboratory 9 configuration audit - run INSIDE the app container
-# (config-audit/run-audit.ps1 copies this folder in and runs it for you).
+# Laboratory 9 configuration audit - runs INSIDE the application container.
+# (config-audit/run-audit.ps1 starts a throwaway container from the release image and
+#  mounts this folder, so you never need a shell on Render.)
 #
 # Output: one line per check, "<check_name> <PASS|FAIL|UNVERIFIED>", optionally followed
 #         by an indented "note:" line (never contains a secret).
@@ -52,6 +53,19 @@ check_value() { # check_value <name> <actual> <expected>
 check_value debug_off "$(get app.debug)" "$(base APP_DEBUG)"
 check_value app_env_label "$(get app.env)" "$(base APP_ENV)"
 
+# Public URL scheme (Render serves https; an http APP_URL breaks cookies and links).
+want_scheme=$(base APP_URL_SCHEME)
+if [ -z "$PROBE" ]; then
+  report app_url_scheme UNVERIFIED "application context unavailable"
+elif [ -z "$want_scheme" ]; then
+  report app_url_scheme UNVERIFIED "no APP_URL_SCHEME in baseline"
+else
+  case "$(get app.url)" in
+    "$want_scheme"://*) report app_url_scheme PASS ;;
+    *) report app_url_scheme FAIL "APP_URL must start with ${want_scheme}://" ;;
+  esac
+fi
+
 # Secrets: presence or absence only, never the value.
 if [ -z "$PROBE" ]; then
   report app_key_present UNVERIFIED "application context unavailable"
@@ -71,18 +85,33 @@ else
   report config_cache_current PASS
 fi
 
-# ---- database account ------------------------------------------------------------------
+# ---- database: driver, TLS and runtime account (no connection is made) --------------------
+check_value db_driver "$(get db.connection)" "$(base DB_CONNECTION)"
+
+want_ssl=$(base DB_SSLMODE)
+if [ -z "$PROBE" ]; then
+  report db_tls UNVERIFIED "application context unavailable"
+elif [ -z "$want_ssl" ]; then
+  report db_tls UNVERIFIED "no DB_SSLMODE in baseline"
+else
+  case "$(get db.sslmode)" in
+    require|verify-ca|verify-full) report db_tls PASS ;;
+    *) report db_tls FAIL "sslmode is '$(get db.sslmode)'; the baseline requires an encrypted connection" ;;
+  esac
+fi
+
 dbuser=$(get db.username)
+forbidden=$(base DB_FORBIDDEN_USER_REGEX)
 if [ -z "$PROBE" ]; then
   report db_runtime_account UNVERIFIED "application context unavailable"
-elif [ "$dbuser" = "root" ]; then
-  report db_runtime_account FAIL "app connects as root"
-elif [ "$dbuser" != "$(base DB_USERNAME)" ]; then
-  report db_runtime_account FAIL "expected '$(base DB_USERNAME)', effective '$dbuser'"
+elif [ -z "$dbuser" ]; then
+  report db_runtime_account FAIL "no database username configured"
+elif [ -n "$forbidden" ] && printf '%s' "$dbuser" | grep -Eq "$forbidden"; then
+  report db_runtime_account FAIL "runtime account '$dbuser' is a privileged account"
 else
   report db_runtime_account PASS
 fi
-report database_access_scope UNVERIFIED "grants are not queried from the app container; needs DBA access"
+report database_access_scope UNVERIFIED "grants are not queried; needs a SQL session with admin rights (see Supabase SQL editor)"
 
 # ---- service identity ------------------------------------------------------------------
 who=$(id -un)
@@ -115,6 +144,17 @@ if [ -f "$root/index.php" ] && [ ! -e "$root/.env" ] && [ ! -e "$root/composer.j
   report document_root PASS
 else
   report document_root FAIL "$root must contain index.php and must not contain .env or composer.json"
+fi
+
+# ---- the web server in this image must serve that same directory --------------------------
+if [ -r /etc/nginx/nginx.conf.template ]; then
+  if grep -Eq "^[[:space:]]*root[[:space:]]+$root;" /etc/nginx/nginx.conf.template; then
+    report nginx_document_root PASS
+  else
+    report nginx_document_root FAIL "nginx template does not use root $root"
+  fi
+else
+  report nginx_document_root UNVERIFIED "no nginx template in this image"
 fi
 
 # ---- secrets must not be baked into the image --------------------------------------------

@@ -1,0 +1,14 @@
+# Declarative baseline for the PRODUCTION release (nonsecret values only).
+# Same rules as baseline.example; only the environment label differs.
+# Use:  .\config-audit\run-audit.ps1 -Image <image@sha256:...> -EnvFile .env.production -Baseline baseline.production.example
+
+APP_ENV=production
+APP_DEBUG=false
+APP_URL_SCHEME=https
+DOCUMENT_ROOT=/var/www/html/public
+WRITABLE_PATHS=storage bootstrap/cache
+SERVICE_USER=www-data
+DB_CONNECTION=pgsql
+DB_SSLMODE=require
+DB_FORBIDDEN_USER_REGEX=^(root|postgres|supabase_admin)(\.|$)
+MIN_CERT_DAYS=7

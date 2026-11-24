@@ -1,0 +1,432 @@
+name: Release
+
+# Laboratory 8 release workflow (Render + Supabase).
+#
+#   environment = staging    mode = build     -> test (MySQL and Postgres), build ONE image,
+#                                                push to GHCR, wait for approval, deploy.
+#   environment = staging    mode = redeploy  -> reuse the image already pushed for that version
+#                                                (this is the rollback), wait for approval, deploy.
+#   environment = production mode = redeploy  -> promote the SAME image that ran in staging.
+#                                                Production never builds: build once, promote the digest.
+#
+# Each GitHub environment (staging, production) needs:
+#   secret   RENDER_DEPLOY_HOOK   the Render service's deploy hook URL (it is a secret)
+#   variable RENDER_URL           the service's public URL, e.g. https://lab-staging.onrender.com
+# and, only if you want the workflow to run migrations (input run_migrations):
+#   secrets  DB_HOST DB_PORT DB_DATABASE DB_USERNAME DB_PASSWORD
+# Environment secrets are released to the job only AFTER the required reviewer approves.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag, e.g. v1.4.0 or v1.4.1-lab-fault"
+        required: true
+        type: string
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        default: staging
+        options:
+          - staging
+          - production
+      mode:
+        description: "build = test, build and push from the selected branch. redeploy = reuse the image already pushed for this version (rollback / promote)."
+        required: true
+        type: choice
+        default: build
+        options:
+          - build
+          - redeploy
+      run_migrations:
+        description: "Run php artisan migrate --force against the target database before deploying (needs the DB_* environment secrets)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  VERSION: ${{ inputs.version }}
+
+jobs:
+  prepare:
+    name: Validate inputs
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.names.outputs.image }}
+    steps:
+      - id: names
+        env:
+          TARGET_ENV: ${{ inputs.environment }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          re='^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$'
+          if ! [[ "$VERSION" =~ $re ]]; then
+            echo "::error::Version must look like v1.4.0 or v1.4.1-lab-fault (got: $VERSION)"
+            exit 1
+          fi
+          if [ "$TARGET_ENV" = "production" ] && [ "$MODE" != "redeploy" ]; then
+            echo "::error::Production never builds. Use mode=redeploy to promote a version that already passed staging."
+            exit 1
+          fi
+          repo="${GITHUB_REPOSITORY,,}"
+          # One image, built from the Dockerfile target "render" (nginx + PHP-FPM).
+          echo "image=ghcr.io/${repo}/app" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Test on ${{ matrix.db }}
+    needs: prepare
+    if: ${{ inputs.mode == 'build' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [mysql, pgsql]
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: testing
+          MYSQL_ROOT_PASSWORD: secret
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -psecret"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: testing
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    env:
+      # Real environment variables win over .env, so the tests run on this database.
+      # (If your phpunit.xml forces sqlite with force="true", the log will show it.)
+      DB_CONNECTION: ${{ matrix.db }}
+      DB_HOST: 127.0.0.1
+      DB_PORT: ${{ matrix.db == 'mysql' && '3306' || '5432' }}
+      DB_DATABASE: testing
+      DB_USERNAME: ${{ matrix.db == 'mysql' && 'root' || 'postgres' }}
+      DB_PASSWORD: secret
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: mbstring, intl, zip, pdo_mysql, pdo_pgsql, pdo_sqlite
+          coverage: none
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Dependency audit
+        run: composer audit
+
+      - name: Prepare test environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: Build frontend (also generates Wayfinder routes)
+        run: |
+          npm ci
+          npm run build
+
+      - name: Run tests
+        run: php artisan test
+
+  build:
+    name: Build and push image
+    needs: [prepare, test]
+    if: ${{ inputs.mode == 'build' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to overwrite an existing version
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+        run: |
+          if docker buildx imagetools inspect "${IMAGE}:${VERSION}" > /dev/null 2>&1; then
+            echo "::error::${IMAGE}:${VERSION} already exists. Versions are immutable; pick a new version."
+            exit 1
+          fi
+
+      - name: Build and push (Dockerfile target "render", linux/amd64)
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: render
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ${{ needs.prepare.outputs.image }}:${{ inputs.version }}
+          build-args: |
+            APP_VERSION=${{ inputs.version }}
+            GIT_SHA=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  resolve:
+    name: Look up existing image (rollback / promote)
+    needs: prepare
+    if: ${{ inputs.mode == 'redeploy' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      digest: ${{ steps.lookup.outputs.digest }}
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: lookup
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+        run: |
+          set -euo pipefail
+          digest=$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{.Manifest.Digest}}')
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Approval gate and deploy (${{ inputs.environment }})
+    needs: [prepare, build, resolve]
+    if: ${{ !cancelled() && (needs.build.result == 'success' || needs.resolve.result == 'success') }}
+    runs-on: ubuntu-latest
+    # The environment has required reviewers: this job waits in "Waiting" until one approves.
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    env:
+      TARGET_ENV: ${{ inputs.environment }}
+      MODE: ${{ inputs.mode }}
+      IMAGE: ${{ needs.prepare.outputs.image }}
+      DIGEST: ${{ needs.build.outputs.digest || needs.resolve.outputs.digest }}
+      BUILD_SHA: ${{ needs.build.result == 'success' && github.sha || '' }}
+    steps:
+      - name: Check environment configuration
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+          RENDER_URL: ${{ vars.RENDER_URL }}
+        run: |
+          set -euo pipefail
+          fail=0
+          if [ -z "${HOOK:-}" ]; then
+            echo "::error::Secret RENDER_DEPLOY_HOOK is not set in the '${TARGET_ENV}' environment."
+            fail=1
+          fi
+          if [ -z "${RENDER_URL:-}" ]; then
+            echo "::error::Variable RENDER_URL is not set in the '${TARGET_ENV}' environment."
+            fail=1
+          fi
+          if [ "$fail" = "1" ]; then
+            echo "First release? The image was built and pushed, so create the Render service from it, add the secret and variable, then run again with mode=redeploy for the same version."
+            echo "Image: ${IMAGE}@${DIGEST}"
+            exit 1
+          fi
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Migration status, and migrate only when requested
+        env:
+          RUN_MIGRATIONS: ${{ inputs.run_migrations }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_DATABASE: ${{ secrets.DB_DATABASE }}
+          DB_USERNAME: ${{ secrets.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DB_HOST:-}" ] || [ -z "${DB_PASSWORD:-}" ]; then
+            if [ "$RUN_MIGRATIONS" = "true" ]; then
+              echo "::error::run_migrations was requested but the DB_* secrets are not set in the '${TARGET_ENV}' environment."
+              exit 1
+            fi
+            echo "DB_* secrets not configured here: migration status skipped. Use scripts/artisan-remote.ps1 locally."
+            echo "migrations=not checked by the workflow" > migrations.txt
+            exit 0
+          fi
+          docker pull "${IMAGE}@${DIGEST}"
+          # Throwaway key: migrate does not use it, but Laravel wants one to boot.
+          run_artisan() {
+            docker run --rm \
+              -e APP_ENV="$TARGET_ENV" -e APP_DEBUG=false \
+              -e APP_KEY="base64:$(openssl rand -base64 32)" \
+              -e DB_CONNECTION=pgsql -e DB_SSLMODE=require \
+              -e DB_HOST -e DB_PORT -e DB_DATABASE -e DB_USERNAME -e DB_PASSWORD \
+              --entrypoint php "${IMAGE}@${DIGEST}" artisan "$@"
+          }
+          echo "--- migrate:status (before) ---"
+          run_artisan migrate:status
+          if [ "$RUN_MIGRATIONS" = "true" ]; then
+            echo "--- migrate --force ---"
+            run_artisan migrate --force
+            echo "--- migrate:status (after) ---"
+            run_artisan migrate:status
+            echo "migrations=migrate --force run" > migrations.txt
+          else
+            echo "migrations=status only (run_migrations not requested)" > migrations.txt
+          fi
+
+      - name: Trigger the Render deploy with the approved digest
+        id: hook
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          set -euo pipefail
+          date -u +%Y-%m-%dT%H:%M:%SZ > hook-time.txt
+          enc=$(jq -rn --arg u "${IMAGE}@${DIGEST}" '$u|@uri')
+          code=$(curl -sS -o hook-response.json -w '%{http_code}' -X POST "${HOOK}&imgURL=${enc}")
+          echo "Render deploy hook responded HTTP ${code}"
+          cat hook-response.json || true
+          echo
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          case "$code" in
+            200) echo "Deploy started." ;;
+            202) echo "Another deploy is running; this one is queued behind it." ;;
+            *)   echo "::error::Render rejected the deploy request (HTTP ${code}). 400 usually means the image URL does not match the service's configured image."; exit 1 ;;
+          esac
+
+      - name: Wait until the new version answers /health
+        id: confirm
+        env:
+          RENDER_URL: ${{ vars.RENDER_URL }}
+        run: |
+          set -uo pipefail
+          url="${RENDER_URL%/}/health"
+          deadline=$((SECONDS + 600))
+          confirmed=0
+          last='(no response)'
+          while [ $SECONDS -lt $deadline ]; do
+            body=$(curl -sS --max-time 25 "$url" 2>/dev/null || true)
+            v=$(printf '%s' "$body" | jq -r '.version // empty' 2>/dev/null || true)
+            s=$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null || true)
+            c=$(printf '%s' "$body" | jq -r '.commit // empty' 2>/dev/null || true)
+            [ -n "$body" ] && last="$body"
+            if [ "$v" = "$VERSION" ] && [ "$s" = "ok" ]; then
+              if [ -n "$BUILD_SHA" ] && [ "$c" != "$BUILD_SHA" ]; then
+                echo "Version matches but commit '$c' differs from built commit '$BUILD_SHA'."
+              else
+                confirmed=1
+                break
+              fi
+            fi
+            echo "waiting... running version='${v:-?}' status='${s:-?}'"
+            sleep 10
+          done
+          echo "confirmed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "health=${last}" >> "$GITHUB_OUTPUT"
+          echo "confirmed=${confirmed}" >> "$GITHUB_OUTPUT"
+          if [ "$confirmed" != "1" ]; then
+            echo "::error::Deploy not confirmed within 10 minutes. Last /health: ${last}"
+            exit 1
+          fi
+
+      - name: Record the release
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RENDER_URL: ${{ vars.RENDER_URL }}
+          HOOK_CODE: ${{ steps.hook.outputs.code }}
+          CONFIRMED: ${{ steps.confirm.outputs.confirmed }}
+          CONFIRMED_AT: ${{ steps.confirm.outputs.confirmed_at }}
+          HEALTH: ${{ steps.confirm.outputs.health }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -uo pipefail
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          hook_time=$(cat hook-time.txt 2>/dev/null || echo "n/a")
+          migrations=$(sed 's/^migrations=//' migrations.txt 2>/dev/null || echo "n/a")
+          commit="${BUILD_SHA:-n/a (existing artifact)}"
+
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals" > approvals.json 2> /dev/null || echo '[]' > approvals.json
+          approvers=$(jq -r 'if type == "array" then map("\(.user.login) (\(.state))") | join(", ") else "" end' approvals.json 2>/dev/null || true)
+          [ -n "$approvers" ] || approvers="not returned by the API - copy it from the run page"
+
+          jq -n \
+            --arg version "$VERSION" --arg environment "$TARGET_ENV" --arg mode "$MODE" \
+            --arg commit "$commit" --arg image "${IMAGE}@${DIGEST}" \
+            --arg approvers "$approvers" --arg triggered_by "$GITHUB_ACTOR" \
+            --arg migrations "$migrations" --arg hook_time "$hook_time" \
+            --arg hook_code "${HOOK_CODE:-}" --arg confirmed "${CONFIRMED:-0}" \
+            --arg confirmed_at "${CONFIRMED_AT:-}" --arg url "${RENDER_URL:-}" \
+            --arg health "${HEALTH:-}" --arg run_url "$run_url" --arg result "$JOB_STATUS" \
+            '{version:$version, environment:$environment, mode:$mode, commit:$commit, image:$image,
+              triggered_by:$triggered_by, approvers:$approvers, migrations:$migrations,
+              deploy_requested_utc:$hook_time, render_http:$hook_code, confirmed:($confirmed=="1"),
+              confirmed_utc:$confirmed_at, url:$url, health:$health, workflow_run:$run_url, result:$result}' > release-record.json
+
+          {
+            echo "## Release ${VERSION} to ${TARGET_ENV}: ${JOB_STATUS}"
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Mode | ${MODE} |"
+            echo "| Commit | \`${commit}\` |"
+            echo "| Image (digest-pinned) | \`${IMAGE}@${DIGEST}\` |"
+            echo "| Triggered by | ${GITHUB_ACTOR} |"
+            echo "| Approver(s) | ${approvers} |"
+            echo "| Migrations | ${migrations} |"
+            echo "| Deploy requested (UTC) | ${hook_time} (Render HTTP ${HOOK_CODE:-n/a}) |"
+            echo "| New version confirmed (UTC) | ${CONFIRMED_AT:-not confirmed} |"
+            echo "| Service URL | ${RENDER_URL:-n/a} |"
+            echo "| Last /health | \`${HEALTH:-n/a}\` |"
+            echo "| Workflow run | ${run_url} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          cat release-record.json
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: release-record-${{ inputs.environment }}-${{ inputs.version }}-${{ inputs.mode }}
+          path: release-record.json
